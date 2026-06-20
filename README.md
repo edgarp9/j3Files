@@ -1,6 +1,9 @@
 # j3Files
 Windows-only file explorer built with Rust and the Win32 Shell, focused on native file operations, tabs, bookmarks, search, and drag-and-drop.
 
+<img width="494" height="347" alt="j3files" src="https://github.com/user-attachments/assets/c33a5c38-c6a2-499b-9f32-90abbd1a74c4" />
+
+
 ## Features
 
 - Native Win32 desktop UI built with Rust and `windows-sys`.
