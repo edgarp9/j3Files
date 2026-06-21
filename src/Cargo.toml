@@ -1,8 +1,9 @@
 [package]
 name = "j3files"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Windows-only file explorer foundation built with Rust and windows-sys."
+license = "GPL-3.0-or-later"
 build = "build.rs"
 
 [dependencies]

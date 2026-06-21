@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -54,7 +55,25 @@ use main_window_workers::{
 
 const WINDOW_CLASS_NAME: &str = "J3FilesMainWindow";
 const PROGRAM_NAME: &str = "j3Files";
+const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PROJECT_URL: &str = "https://github.com/edgarp9";
 const WINDOW_TITLE: &str = PROGRAM_NAME;
+const ABOUT_TEXT_FILE_NAME: &str = "about.txt";
+const DEFAULT_ABOUT_TEXT: &str = include_str!("../about.txt");
+
+fn distribution_text(file_name: &str, fallback: &str) -> String {
+    distribution_text_path(file_name)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn distribution_text_path(file_name: &str) -> Option<PathBuf> {
+    let mut path = std::env::current_exe().ok()?;
+    path.set_file_name(file_name);
+    Some(path)
+}
+
 const APP_ICON_RESOURCE_ID: u16 = 101;
 const NAV_BACK_ICON_RESOURCE_ID: u16 = 102;
 const NAV_FORWARD_ICON_RESOURCE_ID: u16 = 103;
@@ -135,7 +154,6 @@ const ID_FILE_OPERATION_STATUS: u16 = 1909;
 const ID_ABOUT: u16 = 2001;
 const MAX_DRIVE_MENU_ITEMS: usize = 64;
 const MAX_BOOKMARK_MENU_ITEMS: usize = 128;
-const ABOUT_LINK: &str = "https://github.com/edgarp9";
 const DEFAULT_NEW_FOLDER_NAME: &str = "New Folder";
 const FILE_OPERATION_IN_PROGRESS_MESSAGE: &str = "파일 작업 진행 중...";
 const FILE_OPERATION_SHUTDOWN_PENDING_MESSAGE: &str = "파일 작업이 끝나면 창을 닫습니다...";
@@ -910,6 +928,7 @@ struct MainWindow {
     forward_button: ui::WindowHandle,
     up_button: ui::WindowHandle,
     refresh_button: ui::WindowHandle,
+    new_tab_button: ui::WindowHandle,
     address_edit: ui::WindowHandle,
     go_button: ui::WindowHandle,
     search_query_label: ui::WindowHandle,
@@ -1318,6 +1337,7 @@ impl MainWindow {
             forward_button: ui::WindowHandle::null(),
             up_button: ui::WindowHandle::null(),
             refresh_button: ui::WindowHandle::null(),
+            new_tab_button: ui::WindowHandle::null(),
             address_edit: ui::WindowHandle::null(),
             go_button: ui::WindowHandle::null(),
             search_query_label: ui::WindowHandle::null(),
@@ -1531,6 +1551,7 @@ impl MainWindow {
             ui::create_icon_button(hwnd, self.instance, ID_NAV_FORWARD, "Forward")?;
         self.up_button = ui::create_icon_button(hwnd, self.instance, ID_NAV_UP, "Up")?;
         self.refresh_button = ui::create_icon_button(hwnd, self.instance, ID_REFRESH, "Refresh")?;
+        self.new_tab_button = ui::create_button(hwnd, self.instance, ID_TAB_NEW, "+")?;
         self.address_edit = ui::create_address_edit(hwnd, self.instance, ID_ADDRESS)?;
         self.go_button = ui::create_icon_button(hwnd, self.instance, ID_GO, "Go")?;
         self.search_query_label =
@@ -2131,7 +2152,8 @@ impl MainWindow {
         let forward_x = back_x + button_width + spacing;
         let up_x = forward_x + button_width + spacing;
         let refresh_x = up_x + button_width + spacing;
-        let address_x = refresh_x + button_width + spacing;
+        let new_tab_x = refresh_x + button_width + spacing;
+        let address_x = new_tab_x + button_width + spacing;
         let go_x_limit = right_x + right_width - go_button_width;
         let address_width = (go_x_limit - spacing - address_x).max(0);
         let go_x = address_x + address_width + spacing;
@@ -2171,6 +2193,13 @@ impl MainWindow {
         ui::move_window(
             self.refresh_button,
             refresh_x,
+            y,
+            button_width,
+            toolbar_height,
+        )?;
+        ui::move_window(
+            self.new_tab_button,
+            new_tab_x,
             y,
             button_width,
             toolbar_height,
@@ -2289,11 +2318,13 @@ impl MainWindow {
     }
 
     fn show_about_dialog(&self) -> ExplorerResult<()> {
+        let about_text = distribution_text(ABOUT_TEXT_FILE_NAME, DEFAULT_ABOUT_TEXT);
         ui::show_about_dialog(
             self.hwnd,
             PROGRAM_NAME,
-            env!("CARGO_PKG_VERSION"),
-            ABOUT_LINK,
+            PROGRAM_VERSION,
+            PROJECT_URL,
+            &about_text,
         )
     }
 
@@ -2473,6 +2504,7 @@ impl MainWindow {
                 self.forward_button,
                 self.up_button,
                 self.refresh_button,
+                self.new_tab_button,
                 self.address_edit,
                 self.go_button,
                 self.search_query_label,
@@ -2498,6 +2530,7 @@ impl MainWindow {
                 self.forward_button,
                 self.up_button,
                 self.refresh_button,
+                self.new_tab_button,
                 self.address_edit,
                 self.go_button,
                 self.search_query_label,
@@ -6096,6 +6129,15 @@ unsafe extern "system" fn window_proc(
         ui::MESSAGE_DRAW_ITEM => {
             // SAFETY: user data remains owned by the window until WM_NCDESTROY.
             if let Some(window) = unsafe { ui::window_state_mut::<MainWindow>(hwnd) } {
+                if ui::command_id(wparam) == ID_TAB_CONTROL {
+                    if let Some(result) = ui::draw_tab_item(
+                        window.app.appearance_theme(),
+                        &window.font_resource,
+                        lparam,
+                    ) {
+                        return result;
+                    }
+                }
                 if let Some(icon) = window.navigation_icons.for_command(ui::command_id(wparam)) {
                     if let Some(result) = ui::draw_material_icon_button(
                         window.app.appearance_theme(),

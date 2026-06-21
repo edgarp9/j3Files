@@ -3,19 +3,24 @@ use std::mem::{size_of, transmute};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
-use windows_sys::core::HRESULT;
 use windows_sys::Win32::Foundation::{
     FreeLibrary, GetLastError, SetLastError, COLORREF, HMODULE, HWND, POINT, RECT,
     RPC_E_CHANGED_MODE,
 };
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawFocusRect, DrawFrameControl, FillRect,
-    FrameRect, GetDC, GetDeviceCaps, GetStockObject, GetSysColorBrush, InflateRect, InvalidateRect,
-    MapWindowPoints, OffsetRect, ReleaseDC, ScreenToClient, SetBkColor, SetBkMode, SetTextColor,
-    COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DFCS_BUTTONPUSH, DFCS_INACTIVE, DFCS_PUSHED,
-    DFC_BUTTON, FW_NORMAL, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY,
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawFocusRect, DrawFrameControl,
+    DrawTextW, FillRect, FrameRect, GetDC, GetDeviceCaps, GetStockObject, GetSysColorBrush,
+    InflateRect, InvalidateRect, MapWindowPoints, OffsetRect, ReleaseDC, ScreenToClient,
+    SelectObject, SetBkColor, SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_CHARSET,
+    DEFAULT_GUI_FONT, DFCS_BUTTONPUSH, DFCS_INACTIVE, DFCS_PUSHED, DFC_BUTTON, DT_CENTER,
+    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HBRUSH, HDC,
+    HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY,
 };
 use windows_sys::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -40,11 +45,9 @@ use windows_sys::Win32::UI::Controls::{
     LVM_SETIMAGELIST, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVM_SETITEMW, LVM_SETTEXTBKCOLOR,
     LVM_SETTEXTCOLOR, LVNI_SELECTED, LVSIL_SMALL, LVS_EDITLABELS, LVS_EX_DOUBLEBUFFER,
     LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT, LVS_SHOWSELALWAYS, ODS_DISABLED, ODS_FOCUS,
-    ODS_SELECTED, ODT_BUTTON, TASKDIALOGCONFIG, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
-    TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCS_FOCUSNEVER,
-    TDCBF_OK_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_ENABLE_HYPERLINKS,
-    TDF_POSITION_RELATIVE_TO_WINDOW, TDF_SIZE_TO_CONTENT, TDN_HYPERLINK_CLICKED,
-    TD_INFORMATION_ICON, TVE_EXPAND, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
+    ODS_SELECTED, ODT_BUTTON, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS,
+    TCM_GETCURSEL, TCM_GETITEMW, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCS_FOCUSNEVER,
+    TCS_OWNERDRAWFIXED, TVE_EXPAND, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
     TVIF_CHILDREN, TVIF_PARAM, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMW, TVI_LAST,
     TVI_ROOT, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETBKCOLOR, TVM_SETITEMW, TVM_SETLINECOLOR,
@@ -52,7 +55,7 @@ use windows_sys::Win32::UI::Controls::{
     WC_LISTVIEWW, WC_TABCONTROLW, WC_TREEVIEWW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, ReleaseCapture, SetCapture, SetFocus,
+    EnableWindow, GetCapture, ReleaseCapture, SetActiveWindow, SetCapture, SetFocus,
 };
 use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows_sys::Win32::UI::Shell::{
@@ -61,14 +64,17 @@ use windows_sys::Win32::UI::Shell::{
     SEE_MASK_FLAG_NO_UI, SEE_MASK_UNICODE, SHELLEXECUTEINFOW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DrawIconEx, GetClientRect, GetCursorPos, GetParent, GetSystemMetrics,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, LoadCursorW, LoadImageW, MessageBoxW,
-    MoveWindow, RegisterClassExW, SendMessageW, SetCursor, SetProcessDPIAware, SetWindowTextW,
-    ShowWindow, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_OWNERDRAW, DI_NORMAL, ES_AUTOHSCROLL,
-    HICON, HMENU, IDC_ARROW, IDC_SIZEWE, IMAGE_ICON, LR_SHARED, MB_ICONINFORMATION, MB_OK,
-    MINMAXINFO, SB_LINEDOWN, SB_LINEUP, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_HIDE,
-    SW_SHOW, SW_SHOWNORMAL, WM_SETFONT, WM_SETREDRAW, WM_VSCROLL, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DispatchMessageW, DrawIconEx, GetClientRect, GetCursorPos, GetMessageW,
+    GetParent, GetSystemMetrics, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    IsDialogMessageW, LoadCursorW, LoadImageW, MoveWindow, PostQuitMessage, RegisterClassExW,
+    SendMessageW, SetCursor, SetProcessDPIAware, SetWindowTextW, ShowWindow, TranslateMessage,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_OWNERDRAW, DI_NORMAL,
+    ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, HICON, HMENU, IDC_ARROW, IDC_SIZEWE,
+    IMAGE_ICON, LR_SHARED, MINMAXINFO, MSG, SB_LINEDOWN, SB_LINEUP, SM_CXICON, SM_CXSCREEN,
+    SM_CXSMICON, SM_CYICON, SM_CYSCREEN, SM_CYSMICON, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, WM_CLOSE,
+    WM_SETFONT, WM_SETREDRAW, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::domain::{
@@ -83,6 +89,20 @@ mod dpi;
 mod handles;
 mod menus;
 mod messages;
+
+const ABOUT_DIALOG_CLASS_NAME: &str = "J3FilesAboutDialog";
+const ABOUT_DIALOG_BASE_WIDTH: i32 = 560;
+const ABOUT_DIALOG_BASE_HEIGHT: i32 = 420;
+const ABOUT_DIALOG_MARGIN: i32 = 14;
+const ABOUT_DIALOG_SPACING: i32 = 8;
+const ABOUT_DIALOG_VERSION_LABEL_HEIGHT: i32 = 22;
+const ABOUT_DIALOG_BUTTON_HEIGHT: i32 = 28;
+const ABOUT_DIALOG_OK_BUTTON_WIDTH: i32 = 82;
+const ABOUT_DIALOG_MIN_LINK_BUTTON_WIDTH: i32 = 180;
+const ID_ABOUT_DIALOG_OK: u16 = 1;
+const ID_ABOUT_DIALOG_CANCEL: u16 = 2;
+const ID_ABOUT_DIALOG_LINK: u16 = 100;
+const ERROR_CLASS_ALREADY_EXISTS_CODE: u32 = 1410;
 
 pub use self::dpi::{
     DpiAwarenessFailure, DpiAwarenessFailureReason, DpiAwarenessOutcome, DpiAwarenessStep,
@@ -128,6 +148,7 @@ const DARK_MODE_EXPLORER_THEME: [u16; 18] = [
     'r' as u16, 0,
 ];
 const GDI_OPAQUE_BACKGROUND_MODE: i32 = 2;
+const GDI_TRANSPARENT_BACKGROUND_MODE: i32 = 1;
 const INVALIDATE_WITH_ERASE: i32 = 1;
 const INVALIDATE_WITHOUT_ERASE: i32 = 0;
 const TREE_VIEW_USE_SYSTEM_COLOR: isize = -1;
@@ -135,13 +156,7 @@ const MATERIAL_ICON_COLOR: COLORREF = 0x00ff863a;
 const MATERIAL_ICON_GLYPH_RATIO_NUMERATOR: i32 = 3;
 const MATERIAL_ICON_GLYPH_RATIO_DENOMINATOR: i32 = 5;
 const STARTUP_FOLDER_PATH_BUFFER_LEN: usize = 32_768;
-
-type TaskDialogIndirectFn = unsafe extern "system" fn(
-    *const TASKDIALOGCONFIG,
-    *mut i32,
-    *mut i32,
-    *mut windows_sys::core::BOOL,
-) -> HRESULT;
+const TAB_TEXT_BUFFER_LEN: usize = 512;
 
 #[derive(Clone, Copy)]
 struct ThemePalette {
@@ -307,101 +322,397 @@ pub fn show_about_dialog(
     owner: WindowHandle,
     program_name: &str,
     version: &str,
-    link: &str,
+    project_url: &str,
+    about_text: &str,
 ) -> ExplorerResult<()> {
-    let Some((task_dialog_library, task_dialog_indirect)) = task_dialog_indirect_proc() else {
-        show_about_fallback_message(owner, program_name, version, link);
-        return Ok(());
+    let instance = module_handle()?;
+    register_about_dialog_class(instance)?;
+
+    let window_title = format!("About {program_name}");
+    let metrics = if owner.is_null() {
+        system_dpi_metrics()
+    } else {
+        dpi_metrics_for_window(owner)
     };
-    let _task_dialog_library = task_dialog_library;
+    let scale = metrics.ui_scale();
+    let (width, height) = scale.size(ABOUT_DIALOG_BASE_WIDTH, ABOUT_DIALOG_BASE_HEIGHT);
+    let (x, y) = centered_dialog_position(owner, width, height);
+    let closed = Arc::new(AtomicBool::new(false));
+    let attached = Arc::new(AtomicBool::new(false));
+    let state = Box::new(AboutDialogState {
+        project_url: project_url.to_owned(),
+        controls: None,
+        scale,
+        closed: Arc::clone(&closed),
+        attached: Arc::clone(&attached),
+    });
+    let raw_state = Box::into_raw(state);
 
-    let window_title = str_to_wide_null(&format!("About {program_name}"));
-    let main_instruction = str_to_wide_null(program_name);
-    let content = str_to_wide_null(&format!(
-        "Version {version}\n\n<a href=\"{link}\">{link}</a>"
-    ));
+    let dialog = create_about_dialog_window(
+        instance,
+        owner,
+        &window_title,
+        x,
+        y,
+        width,
+        height,
+        raw_state,
+    );
+    let dialog = match dialog {
+        Ok(dialog) => dialog,
+        Err(error) => {
+            if !attached.load(Ordering::SeqCst) {
+                // SAFETY: ownership was not transferred to the window user data.
+                drop(unsafe { Box::from_raw(raw_state) });
+            }
+            return Err(error);
+        }
+    };
 
-    let mut selected_button = 0;
-    let mut config = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: owner.raw(),
-        dwFlags: TDF_ENABLE_HYPERLINKS
-            | TDF_ALLOW_DIALOG_CANCELLATION
-            | TDF_POSITION_RELATIVE_TO_WINDOW
-            | TDF_SIZE_TO_CONTENT,
-        dwCommonButtons: TDCBF_OK_BUTTON,
-        pszWindowTitle: window_title.as_ptr(),
-        pszMainInstruction: main_instruction.as_ptr(),
-        pszContent: content.as_ptr(),
-        pfCallback: Some(about_task_dialog_callback),
+    if let Err(error) = initialize_about_dialog(
+        dialog,
+        instance,
+        program_name,
+        version,
+        project_url,
+        about_text,
+    ) {
+        destroy_window(dialog);
+        return Err(error);
+    }
+
+    if !owner.is_null() {
+        // SAFETY: owner is the top-level application window for this modal child.
+        unsafe {
+            EnableWindow(owner.raw(), 0);
+        }
+    }
+    // SAFETY: dialog is a valid top-level window created above.
+    unsafe {
+        ShowWindow(dialog.raw(), SW_SHOW);
+    }
+
+    let result = run_about_dialog_message_loop(dialog, &closed);
+    if !closed.load(Ordering::SeqCst) {
+        destroy_window(dialog);
+    }
+    if !owner.is_null() {
+        // SAFETY: the owner was disabled before the modal loop and is still a valid window handle.
+        unsafe {
+            EnableWindow(owner.raw(), 1);
+            SetActiveWindow(owner.raw());
+        }
+    }
+    result
+}
+
+struct AboutDialogControls {
+    version_label: WindowHandle,
+    body: WindowHandle,
+    project_link: WindowHandle,
+    ok_button: WindowHandle,
+}
+
+struct AboutDialogState {
+    project_url: String,
+    controls: Option<AboutDialogControls>,
+    scale: UiScale,
+    closed: Arc<AtomicBool>,
+    attached: Arc<AtomicBool>,
+}
+
+fn register_about_dialog_class(instance: InstanceHandle) -> ExplorerResult<()> {
+    let class_name = str_to_wide_null(ABOUT_DIALOG_CLASS_NAME);
+
+    // SAFETY: loading a predefined cursor with a null instance is the documented Win32 pattern.
+    let cursor = unsafe { LoadCursorW(null_mut(), IDC_ARROW) };
+    if cursor.is_null() {
+        return Err(windows_api_error("load cursor", "LoadCursorW"));
+    }
+
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(about_dialog_wnd_proc),
+        hInstance: instance.raw(),
+        hCursor: cursor,
+        // SAFETY: GetSysColorBrush returns a system-owned brush; the caller must not destroy it.
+        hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
+        lpszClassName: class_name.as_ptr(),
         ..Default::default()
     };
-    config.Anonymous1.pszMainIcon = TD_INFORMATION_ICON;
 
-    // SAFETY: config points to a fully initialized TASKDIALOGCONFIG. All string buffers are
-    // null-terminated and live until TaskDialogIndirect returns.
-    let hresult =
-        unsafe { task_dialog_indirect(&config, &mut selected_button, null_mut(), null_mut()) };
-    if hresult < 0 {
-        return Err(ExplorerError::windows_hresult(
-            "show about dialog",
-            "TaskDialogIndirect",
-            hresult,
-            None,
-        ));
+    clear_last_error();
+    // SAFETY: window_class contains a valid class name buffer and a valid window procedure.
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let code = last_error_code();
+        if code != ERROR_CLASS_ALREADY_EXISTS_CODE {
+            return Err(ExplorerError::windows_api(
+                "register about dialog class",
+                "RegisterClassExW",
+                code,
+                None,
+            ));
+        }
     }
 
     Ok(())
 }
 
-fn task_dialog_indirect_proc() -> Option<(DynamicLibrary, TaskDialogIndirectFn)> {
-    let library = DynamicLibrary::load(c"comctl32.dll")?;
-    let proc = library.proc(c"TaskDialogIndirect")?;
-    // SAFETY: the symbol name selects TaskDialogIndirect from comctl32.dll.
-    let task_dialog_indirect = unsafe { transmute(proc) };
-    Some((library, task_dialog_indirect))
-}
+fn create_about_dialog_window(
+    instance: InstanceHandle,
+    owner: WindowHandle,
+    title: &str,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    state: *mut AboutDialogState,
+) -> ExplorerResult<WindowHandle> {
+    let class_name = str_to_wide_null(ABOUT_DIALOG_CLASS_NAME);
+    let title = str_to_wide_null(title);
 
-fn show_about_fallback_message(owner: WindowHandle, program_name: &str, version: &str, link: &str) {
-    let title = str_to_wide_null(&format!("About {program_name}"));
-    let message = str_to_wide_null(&format!("{program_name}\nVersion {version}\n\n{link}"));
-
-    // SAFETY: strings are null terminated and live through the call; owner may be null.
-    unsafe {
-        MessageBoxW(
-            owner.raw(),
-            message.as_ptr(),
+    // SAFETY: class/title buffers live through the call. state is a Box pointer passed through
+    // WM_NCCREATE and reclaimed from GWLP_USERDATA on WM_NCDESTROY.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            class_name.as_ptr(),
             title.as_ptr(),
-            MB_OK | MB_ICONINFORMATION,
-        );
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+            x,
+            y,
+            width.max(1),
+            height.max(1),
+            owner.raw(),
+            null_mut(),
+            instance.raw(),
+            state.cast_const().cast::<c_void>(),
+        )
+    };
+    if hwnd.is_null() {
+        return Err(windows_api_error("create about dialog", "CreateWindowExW"));
     }
+
+    Ok(WindowHandle::from_sys(hwnd))
 }
 
-unsafe extern "system" fn about_task_dialog_callback(
-    hwnd: HWND,
-    msg: u32,
-    _wparam: usize,
-    lparam: isize,
-    _callback_data: isize,
-) -> HRESULT {
-    if msg == TDN_HYPERLINK_CLICKED as u32 && lparam != 0 {
-        if let Err(error) = open_about_link(hwnd, lparam as *const u16) {
-            show_error_message(
-                WindowHandle::from_sys(hwnd),
-                "j3Files",
-                &error.user_message(),
-            );
+fn initialize_about_dialog(
+    dialog: WindowHandle,
+    instance: InstanceHandle,
+    program_name: &str,
+    version: &str,
+    project_url: &str,
+    about_text: &str,
+) -> ExplorerResult<()> {
+    let version_text = format!("{program_name} {version}");
+    let body_text = multiline_edit_text(about_text);
+    let version_label = create_label(dialog, instance, 0, &version_text)?;
+    let body = create_about_body_edit(dialog, instance, &body_text)?;
+    let project_link = create_button(dialog, instance, ID_ABOUT_DIALOG_LINK, project_url)?;
+    let ok_button = create_child_window(
+        dialog,
+        instance,
+        "BUTTON",
+        "OK",
+        ID_ABOUT_DIALOG_OK,
+        WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+    )?;
+
+    let controls = AboutDialogControls {
+        version_label,
+        body,
+        project_link,
+        ok_button,
+    };
+    let Some(state) = (unsafe { window_state_mut::<AboutDialogState>(dialog) }) else {
+        return Err(ExplorerError::state_conflict(
+            "앱 정보 창 상태를 찾을 수 없습니다.",
+        ));
+    };
+    state.controls = Some(controls);
+    layout_about_dialog(dialog)?;
+
+    // SAFETY: ok_button is a valid child button handle.
+    unsafe {
+        SetFocus(ok_button.raw());
+    }
+    Ok(())
+}
+
+fn create_about_body_edit(
+    parent: WindowHandle,
+    instance: InstanceHandle,
+    text: &str,
+) -> ExplorerResult<WindowHandle> {
+    create_child_window(
+        parent,
+        instance,
+        "EDIT",
+        text,
+        0,
+        WS_TABSTOP
+            | WS_VSCROLL
+            | WS_HSCROLL
+            | ES_MULTILINE as u32
+            | ES_READONLY as u32
+            | ES_AUTOVSCROLL as u32
+            | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+    )
+}
+
+fn layout_about_dialog(dialog: WindowHandle) -> ExplorerResult<()> {
+    let Some(state) = (unsafe { window_state_mut::<AboutDialogState>(dialog) }) else {
+        return Ok(());
+    };
+    let Some(controls) = &state.controls else {
+        return Ok(());
+    };
+
+    let rect = client_rect(dialog)?;
+    let margin = state.scale.px(ABOUT_DIALOG_MARGIN);
+    let spacing = state.scale.px(ABOUT_DIALOG_SPACING);
+    let label_height = state.scale.px(ABOUT_DIALOG_VERSION_LABEL_HEIGHT);
+    let button_height = state.scale.px(ABOUT_DIALOG_BUTTON_HEIGHT);
+    let ok_button_width = state.scale.px(ABOUT_DIALOG_OK_BUTTON_WIDTH);
+    let min_link_width = state.scale.px(ABOUT_DIALOG_MIN_LINK_BUTTON_WIDTH);
+    let bottom_y = rect.height - margin - button_height;
+    let ok_x = rect.width - margin - ok_button_width;
+    let link_width = (ok_x - margin - spacing).max(min_link_width);
+    let body_y = margin + label_height + spacing;
+    let body_height = (bottom_y - spacing - body_y).max(state.scale.px(80));
+    let content_width = (rect.width - margin * 2).max(1);
+
+    move_window(
+        controls.version_label,
+        margin,
+        margin,
+        content_width,
+        label_height,
+    )?;
+    move_window(controls.body, margin, body_y, content_width, body_height)?;
+    move_window(
+        controls.project_link,
+        margin,
+        bottom_y,
+        link_width,
+        button_height,
+    )?;
+    move_window(
+        controls.ok_button,
+        ok_x,
+        bottom_y,
+        ok_button_width,
+        button_height,
+    )
+}
+
+fn run_about_dialog_message_loop(dialog: WindowHandle, closed: &AtomicBool) -> ExplorerResult<()> {
+    let mut message = MSG::default();
+
+    while !closed.load(Ordering::SeqCst) {
+        // SAFETY: message is writable and no message filter is used.
+        let result = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
+        if result == -1 {
+            return Err(windows_api_error(
+                "read about dialog message",
+                "GetMessageW",
+            ));
+        }
+        if result == 0 {
+            // SAFETY: preserve the quit request for the outer application loop.
+            unsafe {
+                PostQuitMessage(message.wParam as i32);
+            }
+            return Ok(());
+        }
+
+        // SAFETY: dialog is the active modal window and message was returned by GetMessageW.
+        let handled = unsafe { IsDialogMessageW(dialog.raw(), &message) };
+        if handled != 0 {
+            continue;
+        }
+
+        // SAFETY: message was produced by GetMessageW.
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
     }
 
-    0
+    Ok(())
 }
 
-fn open_about_link(owner: HWND, link: *const u16) -> ExplorerResult<()> {
-    if link.is_null() {
+unsafe extern "system" fn about_dialog_wnd_proc(
+    hwnd: RawWindowHandle,
+    message: u32,
+    wparam: MessageWord,
+    lparam: MessageLong,
+) -> MessageResult {
+    let hwnd = WindowHandle::from_raw(hwnd);
+    match message {
+        MESSAGE_NC_CREATE => {
+            let attached =
+                unsafe { attach_window_state_from_nccreate::<AboutDialogState>(hwnd, lparam) };
+            if attached {
+                if let Some(state) = unsafe { window_state_mut::<AboutDialogState>(hwnd) } {
+                    state.attached.store(true, Ordering::SeqCst);
+                }
+                1
+            } else {
+                0
+            }
+        }
+        MESSAGE_COMMAND => {
+            match command_id(wparam) {
+                ID_ABOUT_DIALOG_OK | ID_ABOUT_DIALOG_CANCEL => close_about_dialog(hwnd),
+                ID_ABOUT_DIALOG_LINK => open_about_project_link(hwnd),
+                _ => {}
+            }
+            0
+        }
+        MESSAGE_SIZE => {
+            if let Err(error) = layout_about_dialog(hwnd) {
+                eprintln!("failed to lay out about dialog: {error}");
+            }
+            0
+        }
+        WM_CLOSE => {
+            close_about_dialog(hwnd);
+            0
+        }
+        MESSAGE_NC_DESTROY => {
+            if let Some(state) = unsafe { take_window_state::<AboutDialogState>(hwnd) } {
+                state.closed.store(true, Ordering::SeqCst);
+            }
+            default_window_proc(hwnd, message, wparam, lparam)
+        }
+        _ => default_window_proc(hwnd, message, wparam, lparam),
+    }
+}
+
+fn close_about_dialog(hwnd: WindowHandle) {
+    destroy_window(hwnd);
+}
+
+fn open_about_project_link(hwnd: WindowHandle) {
+    let Some(state) = (unsafe { window_state_mut::<AboutDialogState>(hwnd) }) else {
+        return;
+    };
+    let project_url = state.project_url.clone();
+    if let Err(error) = open_about_url(hwnd.raw(), &project_url) {
+        show_error_message(hwnd, "j3Files", &error.user_message());
+    }
+}
+
+fn open_about_url(owner: HWND, url: &str) -> ExplorerResult<()> {
+    if url.trim().is_empty() {
         return Err(ExplorerError::state_conflict("링크 주소가 없습니다."));
     }
 
+    let link = str_to_wide_null(url);
     let _apartment = DialogComApartment::initialize("open about link")?;
 
     // SAFETY: SHELLEXECUTEINFOW is a C POD struct. Zero initialization is the documented baseline
@@ -410,12 +721,12 @@ fn open_about_link(owner: HWND, link: *const u16) -> ExplorerResult<()> {
     execute_info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
     execute_info.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_UNICODE;
     execute_info.hwnd = owner;
-    execute_info.lpFile = link;
+    execute_info.lpFile = link.as_ptr();
     execute_info.nShow = SW_SHOWNORMAL;
 
     clear_last_error();
-    // SAFETY: execute_info points to a valid initialized structure. link is the null-terminated
-    // hyperlink URL supplied by the active TaskDialog callback.
+    // SAFETY: execute_info points to a valid initialized structure. link is null-terminated and
+    // lives until ShellExecuteExW returns.
     let succeeded = unsafe { ShellExecuteExW(&mut execute_info) };
     if succeeded == 0 {
         return Err(about_link_error(&execute_info));
@@ -443,6 +754,50 @@ fn shell_execute_error_code(execute_info: &SHELLEXECUTEINFOW) -> Option<u32> {
     }
 }
 
+fn centered_dialog_position(owner: WindowHandle, width: i32, height: i32) -> (i32, i32) {
+    let mut owner_rect = RECT::default();
+    let has_owner_rect =
+        !owner.is_null() && unsafe { GetWindowRect(owner.raw(), &mut owner_rect) } != 0;
+    let (left, top, right, bottom) = if has_owner_rect {
+        (
+            owner_rect.left,
+            owner_rect.top,
+            owner_rect.right,
+            owner_rect.bottom,
+        )
+    } else {
+        (0, 0, unsafe { GetSystemMetrics(SM_CXSCREEN) }, unsafe {
+            GetSystemMetrics(SM_CYSCREEN)
+        })
+    };
+
+    let available_width = right - left;
+    let available_height = bottom - top;
+    (
+        left + (available_width - width).max(0) / 2,
+        top + (available_height - height).max(0) / 2,
+    )
+}
+
+fn multiline_edit_text(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                result.push('\r');
+                if chars.peek().copied() == Some('\n') {
+                    let _ = chars.next();
+                }
+                result.push('\n');
+            }
+            '\n' => result.push_str("\r\n"),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
 struct CoTaskMemPidl(*mut ITEMIDLIST);
 
 impl Drop for CoTaskMemPidl {
@@ -458,6 +813,7 @@ impl Drop for CoTaskMemPidl {
 
 pub struct FontResource {
     handle: HFONT,
+    bold_handle: HFONT,
     owned: bool,
 }
 
@@ -467,38 +823,45 @@ impl FontResource {
             return Self::default_gui_font(metrics);
         }
 
-        let logfont = logfont_for_appearance_font(font, metrics);
-        // SAFETY: logfont points to a fully initialized LOGFONTW for the duration of the call.
-        let handle = unsafe { CreateFontIndirectW(&logfont) };
-        if handle.is_null() {
-            return Err(windows_api_error("create UI font", "CreateFontIndirectW"));
-        }
-
-        Ok(Self {
-            handle,
-            owned: true,
-        })
+        Self::from_logfont(logfont_for_appearance_font(font, metrics), "create UI font")
     }
 
     fn default_gui_font(metrics: DpiMetrics) -> ExplorerResult<Self> {
-        let logfont = default_gui_logfont(metrics);
+        Self::from_logfont(default_gui_logfont(metrics), "create default UI font")
+    }
+
+    fn from_logfont(logfont: LOGFONTW, operation: &'static str) -> ExplorerResult<Self> {
         // SAFETY: logfont points to a fully initialized LOGFONTW for the duration of the call.
         let handle = unsafe { CreateFontIndirectW(&logfont) };
         if handle.is_null() {
-            return Err(windows_api_error(
-                "create default UI font",
-                "CreateFontIndirectW",
-            ));
+            return Err(windows_api_error(operation, "CreateFontIndirectW"));
+        }
+
+        let mut bold_logfont = logfont;
+        bold_logfont.lfWeight = FW_BOLD as i32;
+        // SAFETY: bold_logfont points to a fully initialized LOGFONTW for the duration of the call.
+        let bold_handle = unsafe { CreateFontIndirectW(&bold_logfont) };
+        if bold_handle.is_null() {
+            // SAFETY: handle was created above by CreateFontIndirectW and is still owned here.
+            unsafe {
+                DeleteObject(handle as HGDIOBJ);
+            }
+            return Err(windows_api_error(operation, "CreateFontIndirectW"));
         }
 
         Ok(Self {
             handle,
+            bold_handle,
             owned: true,
         })
     }
 
     fn handle(&self) -> HFONT {
         self.handle
+    }
+
+    fn bold_handle(&self) -> HFONT {
+        self.bold_handle
     }
 }
 
@@ -508,6 +871,12 @@ impl Drop for FontResource {
             // SAFETY: this HFONT was created by CreateFontIndirectW and is owned by FontResource.
             unsafe {
                 DeleteObject(self.handle as HGDIOBJ);
+            }
+        }
+        if self.owned && !self.bold_handle.is_null() && self.bold_handle != self.handle {
+            // SAFETY: this HFONT was created by CreateFontIndirectW and is owned by FontResource.
+            unsafe {
+                DeleteObject(self.bold_handle as HGDIOBJ);
             }
         }
     }
@@ -853,7 +1222,7 @@ pub fn create_tab_control(
         WC_TABCONTROLW,
         "",
         id,
-        WS_TABSTOP | TCS_FOCUSNEVER,
+        WS_TABSTOP | TCS_FOCUSNEVER | TCS_OWNERDRAWFIXED,
         0,
     )
 }
@@ -1179,6 +1548,134 @@ pub fn draw_material_icon_button(
     Some(1)
 }
 
+pub fn draw_tab_item(
+    theme: AppearanceTheme,
+    font: &FontResource,
+    lparam: MessageLong,
+) -> Option<MessageResult> {
+    if lparam == 0 {
+        return None;
+    }
+
+    // SAFETY: WM_DRAWITEM supplies a DRAWITEMSTRUCT pointer for the current message dispatch.
+    let draw = unsafe { (lparam as *const DRAWITEMSTRUCT).as_ref() }?;
+    if draw.CtlType != ODT_TAB {
+        return None;
+    }
+    if draw.itemID == u32::MAX {
+        return Some(1);
+    }
+
+    let selected = draw.itemState & ODS_SELECTED != 0;
+    draw_tab_item_background(theme, draw, selected);
+
+    let mut label = [0u16; TAB_TEXT_BUFFER_LEN];
+    let mut item = TCITEMW {
+        mask: TCIF_TEXT,
+        pszText: label.as_mut_ptr(),
+        cchTextMax: TAB_TEXT_BUFFER_LEN as i32,
+        ..Default::default()
+    };
+
+    // SAFETY: draw.hwndItem is the owner-drawn TabControl and item points to writable text storage.
+    let has_label = unsafe {
+        SendMessageW(
+            draw.hwndItem,
+            TCM_GETITEMW,
+            draw.itemID as usize,
+            (&mut item as *mut TCITEMW).cast::<c_void>() as isize,
+        )
+    } != 0;
+
+    if has_label {
+        let label_len = label
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(label.len());
+        let mut text_rect = draw.rcItem;
+        // SAFETY: text_rect is a local RECT.
+        unsafe {
+            InflateRect(&mut text_rect, -8, -2);
+        }
+        let palette = ThemePalette::for_theme(theme);
+        let font_handle = if selected {
+            font.bold_handle()
+        } else {
+            font.handle()
+        };
+        draw_tab_item_text(
+            draw.hDC,
+            &mut text_rect,
+            &label[..label_len],
+            font_handle,
+            palette.control_text,
+        );
+    }
+
+    if draw.itemState & ODS_FOCUS != 0 {
+        let mut focus_rect = draw.rcItem;
+        // SAFETY: focus_rect is a local RECT.
+        unsafe {
+            InflateRect(&mut focus_rect, -4, -4);
+            DrawFocusRect(draw.hDC, &focus_rect);
+        }
+    }
+
+    Some(1)
+}
+
+fn draw_tab_item_background(theme: AppearanceTheme, draw: &DRAWITEMSTRUCT, selected: bool) {
+    let palette = ThemePalette::for_theme(theme);
+    let colors = TabItemThemeColors::for_theme(palette, selected);
+    let rect = draw.rcItem;
+
+    fill_rect_with_color(draw.hDC, &rect, colors.background);
+    frame_rect_with_color(draw.hDC, &rect, colors.border);
+}
+
+fn draw_tab_item_text(hdc: HDC, rect: &mut RECT, text: &[u16], font: HFONT, color: COLORREF) {
+    if hdc.is_null() || font.is_null() || text.is_empty() || rect.right <= rect.left {
+        return;
+    }
+
+    // SAFETY: hdc is the owner-draw paint DC and font is owned by the live FontResource.
+    let previous_font = unsafe { SelectObject(hdc, font as HGDIOBJ) };
+    if previous_font.is_null() {
+        return;
+    }
+    // SAFETY: hdc is the owner-draw paint DC and color/mode values are plain GDI values.
+    let previous_text_color = unsafe { SetTextColor(hdc, color) };
+    let previous_bk_mode = unsafe { SetBkMode(hdc, GDI_TRANSPARENT_BACKGROUND_MODE) };
+
+    // SAFETY: text and rect are valid for this synchronous draw call.
+    unsafe {
+        DrawTextW(
+            hdc,
+            text.as_ptr(),
+            text.len() as i32,
+            rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+        );
+    }
+
+    if previous_bk_mode != 0 {
+        // SAFETY: restores the mode returned by SetBkMode above.
+        unsafe {
+            SetBkMode(hdc, previous_bk_mode);
+        }
+    }
+    if previous_text_color != u32::MAX {
+        // SAFETY: restores the text color returned by SetTextColor above.
+        unsafe {
+            SetTextColor(hdc, previous_text_color);
+        }
+    }
+    // SAFETY: restores the previous font selected in this DC.
+    unsafe {
+        SelectObject(hdc, previous_font);
+    }
+}
+
 fn draw_icon_button_background(
     theme: AppearanceTheme,
     resources: &ThemeResources,
@@ -1300,6 +1797,29 @@ fn blend_color(base: COLORREF, overlay: COLORREF, numerator: u32, denominator: u
     };
 
     blend(0) | (blend(8) << 8) | (blend(16) << 16)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabItemThemeColors {
+    background: COLORREF,
+    border: COLORREF,
+}
+
+impl TabItemThemeColors {
+    fn for_theme(palette: ThemePalette, selected: bool) -> Self {
+        let background = if selected {
+            palette.control_background
+        } else {
+            palette.window_background
+        };
+        let border = if selected {
+            blend_color(palette.tree_line, MATERIAL_ICON_COLOR, 1, 2)
+        } else {
+            blend_color(palette.tree_line, background, 1, 2)
+        };
+
+        Self { background, border }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3244,6 +3764,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn multiline_edit_text_uses_windows_line_endings() {
+        assert_eq!(multiline_edit_text("a\nb\r\nc\rd"), "a\r\nb\r\nc\r\nd");
+    }
+
+    #[test]
     fn light_tree_theme_restores_system_text_and_background_colors() {
         let palette = ThemePalette::for_theme(AppearanceTheme::Light);
         let colors = TreeViewThemeColors::for_theme(palette);
@@ -3276,6 +3801,18 @@ mod tests {
             assert_eq!(colors.background, palette.control_background as isize);
             assert_eq!(colors.text, palette.control_text as isize);
             assert_eq!(colors.text_background, palette.control_background as isize);
+        }
+    }
+
+    #[test]
+    fn selected_tab_item_uses_distinct_background_and_border() {
+        for theme in AppearanceTheme::options() {
+            let palette = ThemePalette::for_theme(*theme);
+            let selected = TabItemThemeColors::for_theme(palette, true);
+            let inactive = TabItemThemeColors::for_theme(palette, false);
+
+            assert_ne!(selected.background, inactive.background);
+            assert_ne!(selected.border, inactive.border);
         }
     }
 

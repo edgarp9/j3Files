@@ -2,6 +2,7 @@
 /target/
 /debug/
 /release/
+/dist/
 
 # Keep lockfiles tracked by default for reproducible binary/application builds.
 !Cargo.lock
